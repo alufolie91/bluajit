@@ -2701,8 +2701,6 @@ void lj_record_ins(jit_State *J)
   case BC_IFORL:
   case BC_IITERL:
   case BC_ILOOP:
-  case BC_IFUNCF:
-  case BC_IFUNCV:
     lj_trace_err(J, LJ_TRERR_BLACKL);
     break;
 
@@ -2718,6 +2716,7 @@ void lj_record_ins(jit_State *J)
   /* -- Function headers -------------------------------------------------- */
 
   case BC_FUNCF:
+  case BC_IFUNCF:
     rec_func_lua(J);
     break;
   case BC_JFUNCF:
@@ -2725,6 +2724,7 @@ void lj_record_ins(jit_State *J)
     break;
 
   case BC_FUNCV:
+  case BC_IFUNCV:
     rec_func_vararg(J);
     rec_func_lua(J);
     break;
