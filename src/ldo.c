@@ -29,6 +29,7 @@
 #include "lundump.h"
 #include "lvm.h"
 #include "lzio.h"
+#include "ljit.h"
 
 #ifdef __GNUC__
  #ifndef FUNCNORETURN
