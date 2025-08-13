@@ -27,7 +27,6 @@
 #include "ltable.h"
 #include "ltm.h"
 #include "lvm.h"
-#include "ljit.h"
 
 
 
@@ -35,11 +34,10 @@ static const char *getfuncname (lua_State *L, CallInfo *ci, const char **name);
 
 
 static int currentpc (lua_State *L, CallInfo *ci) {
-  if (isLua(ci))  /* must be a Lua function to get current PC */
-    return luaJIT_findpc(ci_func(ci)->l.p,
-                         ci==L->ci ? L->savedpc : ci->savedpc);
-  else
-    return -1;
+  if (!isLua(ci)) return -1;  /* function is not a Lua function? */
+  if (ci == L->ci)
+    ci->savedpc = L->savedpc;
+  return pcRel(ci->savedpc, ci_func(ci)->l.p);
 }
 
 
@@ -186,7 +184,7 @@ static void collectvalidlines (lua_State *L, Closure *f) {
     int i;
     for (i=0; i<f->l.p->sizelineinfo; i++)
       setbvalue(luaH_setnum(L, t, lineinfo[i]), 1);
-    sethvalue(L, L->top, t); 
+    sethvalue(L, L->top, t);
   }
   incr_top(L);
 }
@@ -414,7 +412,7 @@ static Instruction symbexec (const Proto *pt, int lastpc, int reg) {
       case OP_FORLOOP:
       case OP_FORPREP:
         checkreg(pt, a+3);
-        /* go through */
+        /* FALLTHRU */
       case OP_JMP: {
         int dest = pc+1+b;
         /* not full check and jump is forward and do not skip `lastpc'? */
@@ -637,4 +635,3 @@ void luaG_runerror (lua_State *L, const char *fmt, ...) {
   va_end(argp);
   luaG_errormsg(L);
 }
-

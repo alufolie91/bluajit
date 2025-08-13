@@ -18,9 +18,6 @@
 
 #include "lauxlib.h"
 #include "lualib.h"
-#ifndef COCO_DISABLE
-#include "lcoco.h"
-#endif
 
 
 
@@ -109,7 +106,7 @@ static int luaB_setmetatable (lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
   luaL_argcheck(L, t == LUA_TNIL || t == LUA_TTABLE, 2,
                     "nil or table expected");
-  if (luaL_getmetafield(L, 1, "__metatable"))
+  if (l_unlikely(luaL_getmetafield(L, 1, "__metatable")))
     luaL_error(L, "cannot change a protected metatable");
   lua_settop(L, 2);
   lua_setmetatable(L, 1);
@@ -123,10 +120,10 @@ static void getfunc (lua_State *L, int opt) {
     lua_Debug ar;
     int level = opt ? luaL_optint(L, 1, 1) : luaL_checkint(L, 1);
     luaL_argcheck(L, level >= 0, 1, "level must be non-negative");
-    if (lua_getstack(L, level, &ar) == 0)
+    if (l_unlikely(lua_getstack(L, level, &ar) == 0))
       luaL_argerror(L, 1, "invalid level");
     lua_getinfo(L, "f", &ar);
-    if (lua_isnil(L, -1))
+    if (l_unlikely(lua_isnil(L, -1)))
       luaL_error(L, "no function environment for tail call at level %d",
                     level);
   }
@@ -154,7 +151,7 @@ static int luaB_setfenv (lua_State *L) {
     lua_setfenv(L, -2);
     return 0;
   }
-  else if (lua_iscfunction(L, -2) || lua_setfenv(L, -2) == 0)
+  else if (l_unlikely(lua_iscfunction(L, -2) || lua_setfenv(L, -2) == 0))
     luaL_error(L,
           LUA_QL("setfenv") " cannot change environment of given object");
   return 1;
@@ -266,77 +263,9 @@ static int luaB_ipairs (lua_State *L) {
 }
 
 
-static int load_aux (lua_State *L, int status) {
-  if (status == 0)  /* OK? */
-    return 1;
-  else {
-    lua_pushnil(L);
-    lua_insert(L, -2);  /* put before error message */
-    return 2;  /* return nil plus error message */
-  }
-}
-
-
-static int luaB_loadstring (lua_State *L) {
-  size_t l;
-  const char *s = luaL_checklstring(L, 1, &l);
-  const char *chunkname = luaL_optstring(L, 2, s);
-  return load_aux(L, luaL_loadbuffer(L, s, l, chunkname));
-}
-
-
-static int luaB_loadfile (lua_State *L) {
-  const char *fname = luaL_optstring(L, 1, NULL);
-  return load_aux(L, luaL_loadfile(L, fname));
-}
-
-
-/*
-** Reader for generic `load' function: `lua_load' uses the
-** stack for internal stuff, so the reader cannot change the
-** stack top. Instead, it keeps its resulting string in a
-** reserved slot inside the stack.
-*/
-static const char *generic_reader (lua_State *L, void *ud, size_t *size) {
-  (void)ud;  /* to avoid warnings */
-  luaL_checkstack(L, 2, "too many nested functions");
-  lua_pushvalue(L, 1);  /* get function */
-  lua_call(L, 0, 1);  /* call it */
-  if (lua_isnil(L, -1)) {
-    *size = 0;
-    return NULL;
-  }
-  else if (lua_isstring(L, -1)) {
-    lua_replace(L, 3);  /* save string in a reserved stack slot */
-    return lua_tolstring(L, 3, size);
-  }
-  else luaL_error(L, "reader function must return a string");
-  return NULL;  /* to avoid warnings */
-}
-
-
-static int luaB_load (lua_State *L) {
-  int status;
-  const char *cname = luaL_optstring(L, 2, "=(load)");
-  luaL_checktype(L, 1, LUA_TFUNCTION);
-  lua_settop(L, 3);  /* function, eventual name, plus one reserved slot */
-  status = lua_load(L, generic_reader, NULL, cname);
-  return load_aux(L, status);
-}
-
-
-static int luaB_dofile (lua_State *L) {
-  const char *fname = luaL_optstring(L, 1, NULL);
-  int n = lua_gettop(L);
-  if (luaL_loadfile(L, fname) != 0) lua_error(L);
-  lua_call(L, 0, LUA_MULTRET);
-  return lua_gettop(L) - n;
-}
-
-
 static int luaB_assert (lua_State *L) {
   luaL_checkany(L, 1);
-  if (!lua_toboolean(L, 1))
+  if (l_unlikely(!lua_toboolean(L, 1)))
     return luaL_error(L, "%s", luaL_optstring(L, 2, "assertion failed!"));
   return lua_gettop(L);
 }
@@ -349,7 +278,7 @@ static int luaB_unpack (lua_State *L) {
   e = luaL_opt(L, luaL_checkint, 3, luaL_getn(L, 1));
   if (i > e) return 0;  /* empty range */
   n = e - i + 1;  /* number of elements */
-  if (n <= 0 || !lua_checkstack(L, n))  /* n <= 0 means arith. overflow */
+  if (l_unlikely(n <= 0 || !lua_checkstack(L, n)))  /* n <= 0 means arith. overflow */
     return luaL_error(L, "too many results to unpack");
   lua_rawgeti(L, 1, i);  /* push arg[i] (avoiding overflow problems) */
   while (i++ < e)  /* push arg[i + 1...e] */
@@ -450,14 +379,10 @@ static int luaB_newproxy (lua_State *L) {
 static const luaL_Reg base_funcs[] = {
   {"assert", luaB_assert},
   {"collectgarbage", luaB_collectgarbage},
-  {"dofile", luaB_dofile},
   {"error", luaB_error},
   {"gcinfo", luaB_gcinfo},
   {"getfenv", luaB_getfenv},
   {"getmetatable", luaB_getmetatable},
-  {"loadfile", luaB_loadfile},
-  {"load", luaB_load},
-  {"loadstring", luaB_loadstring},
   {"next", luaB_next},
   {"pcall", luaB_pcall},
   {"print", luaB_print},
@@ -520,17 +445,18 @@ static int luaB_costatus (lua_State *L) {
 
 static int auxresume (lua_State *L, lua_State *co, int narg) {
   int status = costatus(L, co);
-  if (!lua_checkstack(co, narg))
+  if (l_unlikely(!lua_checkstack(co, narg)))
     luaL_error(L, "too many arguments to resume");
-  if (status != CO_SUS) {
+  if (l_unlikely(status != CO_SUS)) {
     lua_pushfstring(L, "cannot resume %s coroutine", statnames[status]);
     return -1;  /* error flag */
   }
   lua_xmove(L, co, narg);
+  lua_setlevel(L, co);
   status = lua_resume(co, narg);
   if (status == 0 || status == LUA_YIELD) {
     int nres = lua_gettop(co);
-    if (!lua_checkstack(L, nres + 1))
+    if (l_unlikely(!lua_checkstack(L, nres + 1)))
       luaL_error(L, "too many results to resume");
     lua_xmove(co, L, nres);  /* move yielded values */
     return nres;
@@ -575,27 +501,10 @@ static int luaB_auxwrap (lua_State *L) {
 }
 
 
-#ifndef COCO_DISABLE
-static int luaB_cstacksize (lua_State *L)
-{
-  lua_pushinteger(L, luaCOCO_cstacksize(luaL_optint(L, 1, -1)));
-  return 1;
-}
-#endif
-
-
 static int luaB_cocreate (lua_State *L) {
-#ifdef COCO_DISABLE
   lua_State *NL = lua_newthread(L);
   luaL_argcheck(L, lua_isfunction(L, 1) && !lua_iscfunction(L, 1), 1,
     "Lua function expected");
-#else
-  int cstacksize = luaL_optint(L, 2, 0);
-  lua_State *NL = lua_newcthread(L, cstacksize);
-  luaL_argcheck(L, lua_isfunction(L, 1) &&
-                   (cstacksize >= 0 ? 1 : !lua_iscfunction(L, 1)),
-                1, "Lua function expected");
-#endif
   lua_pushvalue(L, 1);  /* move function to top */
   lua_xmove(L, NL, 1);  /* move function from L to NL */
   return 1;
@@ -628,9 +537,6 @@ static const luaL_Reg co_funcs[] = {
   {"status", luaB_costatus},
   {"wrap", luaB_cowrap},
   {"yield", luaB_yield},
-#ifndef COCO_DISABLE
-  {"cstacksize", luaB_cstacksize},
-#endif
   {NULL, NULL}
 };
 
@@ -653,7 +559,7 @@ static void base_open (lua_State *L) {
   luaL_register(L, "_G", base_funcs);
   lua_pushliteral(L, LUA_VERSION);
   lua_setglobal(L, "_VERSION");  /* set global _VERSION */
-  /* `ipairs' and `pairs' need auxiliary functions as upvalues */
+  /* `ipairs' and `pairs' need auxliliary functions as upvalues */
   auxopen(L, "ipairs", luaB_ipairs, ipairsaux);
   auxopen(L, "pairs", luaB_pairs, luaB_next);
   /* `newproxy' needs a weaktable as upvalue */
@@ -670,10 +576,5 @@ static void base_open (lua_State *L) {
 LUALIB_API int luaopen_base (lua_State *L) {
   base_open(L);
   luaL_register(L, LUA_COLIBNAME, co_funcs);
-#ifndef COCO_DISABLE
-  lua_pushboolean(L, 1); 
-  lua_setfield(L, -2, "coco");
-#endif
   return 2;
 }
-

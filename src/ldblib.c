@@ -19,48 +19,6 @@
 
 
 
-static int db_getregistry (lua_State *L) {
-  lua_pushvalue(L, LUA_REGISTRYINDEX);
-  return 1;
-}
-
-
-static int db_getmetatable (lua_State *L) {
-  luaL_checkany(L, 1);
-  if (!lua_getmetatable(L, 1)) {
-    lua_pushnil(L);  /* no metatable */
-  }
-  return 1;
-}
-
-
-static int db_setmetatable (lua_State *L) {
-  int t = lua_type(L, 2);
-  luaL_argcheck(L, t == LUA_TNIL || t == LUA_TTABLE, 2,
-                    "nil or table expected");
-  lua_settop(L, 2);
-  lua_pushboolean(L, lua_setmetatable(L, 1));
-  return 1;
-}
-
-
-static int db_getfenv (lua_State *L) {
-  luaL_checkany(L, 1);
-  lua_getfenv(L, 1);
-  return 1;
-}
-
-
-static int db_setfenv (lua_State *L) {
-  luaL_checktype(L, 2, LUA_TTABLE);
-  lua_settop(L, 2);
-  if (lua_setfenv(L, 1) == 0)
-    luaL_error(L, LUA_QL("setfenv")
-                  " cannot change environment of given object");
-  return 1;
-}
-
-
 static void settabss (lua_State *L, const char *i, const char *v) {
   lua_pushstring(L, v);
   lua_setfield(L, -2, i);
@@ -115,7 +73,7 @@ static int db_getinfo (lua_State *L) {
   }
   else
     return luaL_argerror(L, arg+1, "function or level expected");
-  if (!lua_getinfo(L1, options, &ar))
+  if (l_unlikely(!lua_getinfo(L1, options, &ar)))
     return luaL_argerror(L, arg+2, "invalid option");
   lua_createtable(L, 0, 2);
   if (strchr(options, 'S')) {
@@ -139,14 +97,14 @@ static int db_getinfo (lua_State *L) {
     treatstackoption(L, L1, "func");
   return 1;  /* return table */
 }
-    
+
 
 static int db_getlocal (lua_State *L) {
   int arg;
   lua_State *L1 = getthread(L, &arg);
   lua_Debug ar;
   const char *name;
-  if (!lua_getstack(L1, luaL_checkint(L, arg+1), &ar))  /* out of range? */
+  if (l_unlikely(!lua_getstack(L1, luaL_checkint(L, arg+1), &ar)))  /* out of range? */
     return luaL_argerror(L, arg+1, "level out of range");
   name = lua_getlocal(L1, &ar, luaL_checkint(L, arg+2));
   if (name) {
@@ -159,20 +117,6 @@ static int db_getlocal (lua_State *L) {
     lua_pushnil(L);
     return 1;
   }
-}
-
-
-static int db_setlocal (lua_State *L) {
-  int arg;
-  lua_State *L1 = getthread(L, &arg);
-  lua_Debug ar;
-  if (!lua_getstack(L1, luaL_checkint(L, arg+1), &ar))  /* out of range? */
-    return luaL_argerror(L, arg+1, "level out of range");
-  luaL_checkany(L, arg+3);
-  lua_settop(L, arg+3);
-  lua_xmove(L, L1, 1);
-  lua_pushstring(L, lua_setlocal(L1, &ar, luaL_checkint(L, arg+2)));
-  return 1;
 }
 
 
@@ -194,14 +138,8 @@ static int db_getupvalue (lua_State *L) {
 }
 
 
-static int db_setupvalue (lua_State *L) {
-  luaL_checkany(L, 3);
-  return auxupvalue(L, 0);
-}
 
-
-
-static const char KEY_HOOK = 'h';
+static char KEY_HOOK = 'h';
 
 
 static void hookf (lua_State *L, lua_Debug *ar) {
@@ -299,23 +237,6 @@ static int db_gethook (lua_State *L) {
 }
 
 
-static int db_debug (lua_State *L) {
-  for (;;) {
-    char buffer[250];
-    fputs("lua_debug> ", stderr);
-    if (fgets(buffer, sizeof(buffer), stdin) == 0 ||
-        strcmp(buffer, "cont\n") == 0)
-      return 0;
-    if (luaL_loadbuffer(L, buffer, strlen(buffer), "=(debug command)") ||
-        lua_pcall(L, 0, 0, 0)) {
-      fputs(lua_tostring(L, -1), stderr);
-      fputs("\n", stderr);
-    }
-    lua_settop(L, 0);  /* remove eventual returns */
-  }
-}
-
-
 #define LEVELS1	12	/* size of the first part of the stack */
 #define LEVELS2	10	/* size of the second part of the stack */
 
@@ -373,19 +294,11 @@ static int db_errorfb (lua_State *L) {
 
 
 static const luaL_Reg dblib[] = {
-  {"debug", db_debug},
-  {"getfenv", db_getfenv},
   {"gethook", db_gethook},
   {"getinfo", db_getinfo},
   {"getlocal", db_getlocal},
-  {"getregistry", db_getregistry},
-  {"getmetatable", db_getmetatable},
   {"getupvalue", db_getupvalue},
-  {"setfenv", db_setfenv},
   {"sethook", db_sethook},
-  {"setlocal", db_setlocal},
-  {"setmetatable", db_setmetatable},
-  {"setupvalue", db_setupvalue},
   {"traceback", db_errorfb},
   {NULL, NULL}
 };
@@ -395,4 +308,3 @@ LUALIB_API int luaopen_debug (lua_State *L) {
   luaL_register(L, LUA_DBLIBNAME, dblib);
   return 1;
 }
-

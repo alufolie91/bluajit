@@ -60,7 +60,6 @@ typedef union {
   GCObject *gc;
   void *p;
   lua_Number n;
-  ptrdiff_t na[sizeof(lua_Number)/sizeof(ptrdiff_t)];  /* LuaJIT kludge */
   int b;
 } Value;
 
@@ -73,7 +72,7 @@ typedef union {
 
 typedef struct lua_TValue {
   TValuefields;
-} LUA_TVALUE_ALIGN TValue;
+} TValue;
 
 
 /* Macros to test type */
@@ -101,7 +100,7 @@ typedef struct lua_TValue {
 #define bvalue(o)	check_exp(ttisboolean(o), (o)->value.b)
 #define thvalue(o)	check_exp(ttisthread(o), &(o)->value.gc->th)
 
-#define l_isfalse(o)	(ttisnil(o) || (ttisboolean(o) && bvalue(o) == 0))
+#define l_isfalse(o)	(ttisnil(o) || (ttisboolean(o) && bvalue(o) == 0) || (ttisnumber(o) && nvalue(o) == 0))
 
 /*
 ** for internal debug only
@@ -138,22 +137,22 @@ typedef struct lua_TValue {
 
 #define setthvalue(L,obj,x) \
   { TValue *i_o=(obj); \
-    i_o->value.gc=cast(GCObject *, (x)); i_o->tt=LUA_TTHREAD; \
+    i_o->value.gc=cast(GCObject *, (void *)(x)); i_o->tt=LUA_TTHREAD; \
     checkliveness(G(L),i_o); }
 
 #define setclvalue(L,obj,x) \
   { TValue *i_o=(obj); \
-    i_o->value.gc=cast(GCObject *, (x)); i_o->tt=LUA_TFUNCTION; \
+    i_o->value.gc=cast(GCObject *, (void *)(x)); i_o->tt=LUA_TFUNCTION; \
     checkliveness(G(L),i_o); }
 
 #define sethvalue(L,obj,x) \
   { TValue *i_o=(obj); \
-    i_o->value.gc=cast(GCObject *, (x)); i_o->tt=LUA_TTABLE; \
+    i_o->value.gc=cast(GCObject *, (void *)(x)); i_o->tt=LUA_TTABLE; \
     checkliveness(G(L),i_o); }
 
 #define setptvalue(L,obj,x) \
   { TValue *i_o=(obj); \
-    i_o->value.gc=cast(GCObject *, (x)); i_o->tt=LUA_TPROTO; \
+    i_o->value.gc=cast(GCObject *, (void *)(x)); i_o->tt=LUA_TPROTO; \
     checkliveness(G(L),i_o); }
 
 
@@ -251,10 +250,6 @@ typedef struct Proto {
   lu_byte numparams;
   lu_byte is_vararg;
   lu_byte maxstacksize;
-  /* LuaJIT extensions */
-  void *jit_mcode;  /* compiled machine code base address */
-  size_t jit_szmcode;  /* size of compiled mcode */
-  int jit_status;  /* JIT engine status code */
 } Proto;
 
 
@@ -295,7 +290,7 @@ typedef struct UpVal {
 
 #define ClosureHeader \
 	CommonHeader; lu_byte isC; lu_byte nupvalues; GCObject *gclist; \
-	struct Table *env; lua_CFunction jit_gate
+	struct Table *env
 
 typedef struct CClosure {
   ClosureHeader;
@@ -342,7 +337,7 @@ typedef struct Node {
 
 typedef struct Table {
   CommonHeader;
-  lu_byte flags;  /* 1<<p means tagmethod(p) is not present */ 
+  lu_byte flags;  /* 1<<p means tagmethod(p) is not present */
   lu_byte lsizenode;  /* log2 of size of `node' array */
   struct Table *metatable;
   TValue *array;  /* array part */
@@ -361,13 +356,13 @@ typedef struct Table {
 	(check_exp((size&(size-1))==0, (cast(int, (s) & ((size)-1)))))
 
 
-#define twoto(x)	(1<<(x))
+#define twoto(x)	((ptrdiff_t)1<<(x))
 #define sizenode(t)	(twoto((t)->lsizenode))
 
 
 #define luaO_nilobject		(&luaO_nilobject_)
 
-LUAI_DATA const TValue luaO_nilobject_;
+LUAI_DATA /*const*/ TValue luaO_nilobject_;
 
 #define ceillog2(x)	(luaO_log2((x)-1) + 1)
 
@@ -383,4 +378,3 @@ LUAI_FUNC void luaO_chunkid (char *out, const char *source, size_t len);
 
 
 #endif
-

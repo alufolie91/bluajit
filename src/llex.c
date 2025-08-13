@@ -1,5 +1,5 @@
 /*
-** $Id: llex.c,v 2.20.1.2 2009/11/23 14:58:22 roberto Exp $
+** $Id: llex.c,v 2.20.1.1 2007/12/27 13:02:25 roberto Exp $
 ** Lexical Analyzer
 ** See Copyright Notice in lua.h
 */
@@ -23,6 +23,7 @@
 #include "ltable.h"
 #include "lzio.h"
 
+#define _HEX2INT_(v) ( (v) <= '9' ? (v)-'0' : tolower(v)-'a'+10 )
 
 
 #define next(ls) (ls->current = zgetc(ls->z))
@@ -35,12 +36,13 @@
 
 /* ORDER RESERVED */
 const char *const luaX_tokens [] = {
-    "and", "break", "do", "else", "elseif",
+    "and", "break", "continue", "do", "else", "elseif",
     "end", "false", "for", "function", "if",
     "in", "local", "nil", "not", "or", "repeat",
     "return", "then", "true", "until", "while",
     "..", "...", "==", ">=", "<=", "~=",
     "<number>", "<name>", "<string>", "<eof>",
+    "<<", ">>", "^^",
     NULL
 };
 
@@ -118,10 +120,8 @@ TString *luaX_newstring (LexState *ls, const char *str, size_t l) {
   lua_State *L = ls->L;
   TString *ts = luaS_newlstr(L, str, l);
   TValue *o = luaH_setstr(L, ls->fs->h, ts);  /* entry for `str' */
-  if (ttisnil(o)) {
+  if (ttisnil(o))
     setbvalue(o, 1);  /* make sure `str' will not be collected */
-    luaC_checkGC(L);
-  }
   return ts;
 }
 
@@ -146,6 +146,7 @@ void luaX_setinput (lua_State *L, LexState *ls, ZIO *z, TString *source) {
   ls->linenumber = 1;
   ls->lastline = 1;
   ls->source = source;
+  ls->refstr = 0;
   luaZ_resizebuffer(ls->L, ls->buff, LUA_MINBUFFER);  /* initialize buffer */
   next(ls);  /* read first char */
 }
@@ -300,6 +301,17 @@ static void read_string (LexState *ls, int del, SemInfo *seminfo) {
           case '\n':  /* go through */
           case '\r': save(ls, '\n'); inclinenumber(ls); continue;
           case EOZ: continue;  /* will raise an error next loop */
+          case '$':
+            if (del == '"') {
+              save_and_next(ls); /* skip $ */
+              seminfo->ts = luaX_newstring(ls, luaZ_buffer(ls->buff) + 1,
+                            luaZ_bufflen(ls->buff) - 2);
+              ls->refstr++; /* expect '\' anytime soon */
+              lua_assert(ls->lookahead.token == TK_EOS);
+              ls->lookahead.token = TK_CONCAT;
+              return;
+            }
+            /* FALLTHRU */
           default: {
             if (!isdigit(ls->current))
               save_and_next(ls);  /* handles \\, \", \', and \? */
@@ -316,6 +328,77 @@ static void read_string (LexState *ls, int del, SemInfo *seminfo) {
             }
             continue;
           }
+            // "\x00".."\xFFFF": raw hex literals
+            //
+          case 'x': {
+              int i;
+              c = 0;
+              next(ls);   // skip 'x'
+
+              for( i=0; i<5 && isxdigit(ls->current); i++ ) {
+                c = (c<<4) | _HEX2INT_(ls->current);
+                next(ls);
+              };
+
+            switch (i) {
+                case 4: save( ls, (c>>8) & 0xff );
+                /* FALLTHRU */
+                case 2: save( ls, c&0xff );
+                        break;
+                case 5:
+                default:
+                    luaX_lexerror(ls, "escape sequence wrong size (2 or 4 digits)", TK_STRING);
+            }
+          }
+          continue;
+
+            // "\u0000".."\x10FFFF": UTF-8 encoded Unicode
+            //
+            // Note that although codes are entered like this (must have min. four digit,
+            // just to tease you!) the actual outcome in the string will vary between
+            // 1..4 bytes, depending on the value range.
+            //
+          case 'u': {
+              int i;
+              c = 0;
+              next(ls);   // skip 'x'
+
+              for ( i=0; i<7 && isxdigit(ls->current); i++ ) {
+                c = (c<<4) | _HEX2INT_(ls->current);
+                next(ls);
+              };
+
+              if ((i!=4) && (i!=6)) {
+                luaX_lexerror(ls, "escape sequence wrong size (4 or 6 digits)", TK_STRING);
+              }
+
+    /* http://www.cl.cam.ac.uk/~mgk25/unicode.html#utf-8
+        U-00000000 - U-0000007F:	0xxxxxxx
+        U-00000080 - U-000007FF:	110xxxxx 10xxxxxx
+        U-00000800 - U-0000FFFF:	1110xxxx 10xxxxxx 10xxxxxx
+        U-00010000 - U-001FFFFF:	11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+        (U-00200000 - U-03FFFFFF:	111110xx 10xxxxxx 10xxxxxx 10xxxxxx 10xxxxxx)
+        (U-04000000 - U-7FFFFFFF:	1111110x 10xxxxxx 10xxxxxx 10xxxxxx 10xxxxxx 10xxxxxx)
+    */
+              if ( c <= 0x007f ) {  // 1-byte
+                save( ls, c );
+              } else if ( c <= 0x000007ff ) {   // 2-byte
+                save( ls, 0xc0 | ((c>>6)&0x1f) );
+                save( ls, 0x80 | (c&0x3f) );
+              } else if ( c <= 0x0000ffff ) {   // 3-byte
+                save( ls, 0xe0 | ((c>>12)&0x0f) );
+                save( ls, 0x80 | ((c>>6)&0x3f) );
+                save( ls, 0x80 | (c&0x3f) );
+              } else if ( c <= 0x001fffff ) {   // 4-byte
+                save( ls, 0xf0 | ((c>>18)&0x07) );
+                save( ls, 0x80 | ((c>>12)&0x3f) );
+                save( ls, 0x80 | ((c>>6)&0x3f) );
+                save( ls, 0x80 | (c&0x3f) );
+              } else {
+                luaX_lexerror(ls, "escape sequence too large", TK_STRING);
+              }
+            }
+            continue;
         }
         save(ls, c);
         next(ls);
@@ -359,6 +442,39 @@ static int llex (LexState *ls, SemInfo *seminfo) {
           next(ls);
         continue;
       }
+      case '/': {
+        next(ls);
+        if (ls->current != '/' && ls->current != '*') return '/';
+        /* else is a comment */
+        if (ls->current == '*') {
+          char last = '\n'; /* don't remember the first asterisk, we need a different one. */
+          next(ls);
+          if (currIsNewline(ls))  /* comment starts with a newline? */
+            inclinenumber(ls);  /* skip it */
+          while(last != '*' || ls->current != '/') {
+            switch (ls->current) {
+            case EOZ:
+              luaX_lexerror(ls, "unterminated long comment", TK_EOS);
+              break;
+            case '\n':
+            case '\r':
+              last = '\n'; /* remember the newline */
+              inclinenumber(ls);
+              break;
+            default:
+              last = ls->current;
+              next(ls);
+              break;
+            }
+          }
+          next(ls);
+          continue;
+        }
+        /* else short comment */
+        while (!currIsNewline(ls) && ls->current != EOZ)
+          next(ls);
+        continue;
+      }
       case '[': {
         int sep = skip_sep(ls);
         if (sep >= 0) {
@@ -368,20 +484,34 @@ static int llex (LexState *ls, SemInfo *seminfo) {
         else if (sep == -1) return '[';
         else luaX_lexerror(ls, "invalid long string delimiter", TK_STRING);
       }
+      /* FALLTHRU */
       case '=': {
         next(ls);
         if (ls->current != '=') return '=';
         else { next(ls); return TK_EQ; }
       }
+      /* FALLTHRU */
       case '<': {
         next(ls);
+        if (ls->current == '<') { next(ls); return TK_SHL; }
         if (ls->current != '=') return '<';
         else { next(ls); return TK_LE; }
       }
       case '>': {
         next(ls);
+        if (ls->current == '>') { next(ls); return TK_SHR; }
         if (ls->current != '=') return '>';
         else { next(ls); return TK_GE; }
+      }
+      case '^': {
+        next(ls);
+        if (ls->current == '^') { next(ls); return TK_XOR; }
+        else { return '^'; }
+      }
+      case '!': {
+        next(ls);
+        if (ls->current != '=') return '~';
+        else { next(ls); return TK_NE; }
       }
       case '~': {
         next(ls);
@@ -406,9 +536,25 @@ static int llex (LexState *ls, SemInfo *seminfo) {
           return TK_NUMBER;
         }
       }
+      case '$': {
+        int i = 0;
+        next(ls);
+        while (isdigit(ls->current)) {
+          i = 10*i + (ls->current-'0');
+          next(ls);
+        }
+        seminfo->r = i;
+        return '$';
+      }
       case EOZ: {
         return TK_EOS;
       }
+      case '\\': if (ls->refstr) {
+        ls->refstr--;
+        ls->current = '"'; /* whacky! */
+        return TK_CONCAT;
+      }
+      /* FALLTHRU */
       default: {
         if (isspace(ls->current)) {
           lua_assert(!currIsNewline(ls));
@@ -460,4 +606,3 @@ void luaX_lookahead (LexState *ls) {
   lua_assert(ls->lookahead.token == TK_EOS);
   ls->lookahead.token = llex(ls, &ls->lookahead.seminfo);
 }
-

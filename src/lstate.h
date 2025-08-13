@@ -12,15 +12,10 @@
 #include "lobject.h"
 #include "ltm.h"
 #include "lzio.h"
-#ifndef COCO_DISABLE
-#include "lcoco.h"
-#endif
 
 
 
 struct lua_longjmp;  /* defined in ldo.c */
-struct jit_State;  /* defined in ljit.c */
-typedef int (*luaJIT_GateLJ)(lua_State *L, StkId func, int nresults);
 
 
 /* table of globals */
@@ -31,8 +26,7 @@ typedef int (*luaJIT_GateLJ)(lua_State *L, StkId func, int nresults);
 
 
 /* extra stack space to handle TM calls and some other extras */
-/* LuaJIT uses more than the default (5) to speed up calls (setnil loop) */
-#define EXTRA_STACK   8
+#define EXTRA_STACK   5
 
 
 #define BASIC_CI_SIZE           8
@@ -54,7 +48,7 @@ typedef struct stringtable {
 typedef struct CallInfo {
   StkId base;  /* base for this function */
   StkId func;  /* function index in the stack */
-  StkId top;  /* top for this function */
+  StkId	top;  /* top for this function */
   const Instruction *savedpc;
   int nresults;  /* expected number of results from this function */
   int tailcalls;  /* number of tail calls lost under this entry */
@@ -97,11 +91,6 @@ typedef struct global_State {
   UpVal uvhead;  /* head of double-linked list of all open upvalues */
   struct Table *mt[NUM_TAGS];  /* metatables for basic types */
   TString *tmname[TM_N];  /* array with tag-method names */
-  /* LuaJIT extensions */
-  struct jit_State *jit_state;  /* JIT state */
-  luaJIT_GateLJ jit_gateLJ;  /* Lua -> JIT gate */
-  lua_CFunction jit_gateJL;  /* JIT -> Lua callgate */
-  lua_CFunction jit_gateJC;  /* JIT -> C callgate */
 } global_State;
 
 
@@ -123,6 +112,7 @@ struct lua_State {
   int stacksize;
   int size_ci;  /* size of array `base_ci' */
   unsigned short nCcalls;  /* number of nested C calls */
+  unsigned short baseCcalls;  /* nested C calls when resuming coroutine */
   lu_byte hookmask;
   lu_byte allowhook;
   int basehookcount;
@@ -169,11 +159,10 @@ union GCObject {
 #define gco2th(o)	check_exp((o)->gch.tt == LUA_TTHREAD, &((o)->th))
 
 /* macro to convert any Lua object into a GCObject */
-#define obj2gco(v)	(cast(GCObject *, (v)))
+#define obj2gco(v)	(cast(GCObject *, (void *)(v)))
 
 
 LUAI_FUNC lua_State *luaE_newthread (lua_State *L);
 LUAI_FUNC void luaE_freethread (lua_State *L, lua_State *L1);
 
 #endif
-

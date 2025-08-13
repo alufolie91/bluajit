@@ -1,5 +1,5 @@
 /*
-** $Id: lcode.c,v 2.25.1.5 2011/01/31 14:53:16 roberto Exp $
+** $Id: lcode.c,v 2.25.1.3 2007/12/28 15:32:23 roberto Exp $
 ** Code generator for Lua
 ** See Copyright Notice in lua.h
 */
@@ -270,6 +270,7 @@ static int boolK (FuncState *fs, int b) {
 
 static int nilK (FuncState *fs) {
   TValue k, v;
+  setbvalue(&v, 0);
   setnilvalue(&v);
   /* cannot use nil as key; instead use table itself to represent nil */
   sethvalue(fs->L, &k, fs->h);
@@ -544,6 +545,10 @@ void luaK_goiftrue (FuncState *fs, expdesc *e) {
       pc = NO_JUMP;  /* always true; do nothing */
       break;
     }
+    case VFALSE: {
+      pc = luaK_jump(fs);  /* always jump */
+      break;
+    }
     case VJMP: {
       invertjump(fs, e);
       pc = e->u.s.info;
@@ -566,6 +571,10 @@ static void luaK_goiffalse (FuncState *fs, expdesc *e) {
   switch (e->k) {
     case VNIL: case VFALSE: {
       pc = NO_JUMP;  /* always false; do nothing */
+      break;
+    }
+    case VTRUE: {
+      pc = luaK_jump(fs);  /* always jump */
       break;
     }
     case VJMP: {
@@ -626,10 +635,17 @@ void luaK_indexed (FuncState *fs, expdesc *t, expdesc *k) {
 
 static int constfolding (OpCode op, expdesc *e1, expdesc *e2) {
   lua_Number v1, v2, r;
+	double d;
   if (!isnumeral(e1) || !isnumeral(e2)) return 0;
   v1 = e1->u.nval;
   v2 = e2->u.nval;
   switch (op) {
+    case OP_BAND: r = luai_numand(v1, v2); break;
+    case OP_BOR: r = luai_numor(v1, v2); break;
+    case OP_BXOR: r = luai_numxor(v1, v2); break;
+    case OP_BSHL: r = luai_numshl(v1, v2); break;
+    case OP_BSHR: r = luai_numshr(v1, v2); break;
+    case OP_BNOT: r = luai_numnot(v1); break;
     case OP_ADD: r = luai_numadd(v1, v2); break;
     case OP_SUB: r = luai_numsub(v1, v2); break;
     case OP_MUL: r = luai_nummul(v1, v2); break;
@@ -639,7 +655,7 @@ static int constfolding (OpCode op, expdesc *e1, expdesc *e2) {
     case OP_MOD:
       if (v2 == 0) return 0;  /* do not attempt to divide by 0 */
       r = luai_nummod(v1, v2); break;
-    case OP_POW: r = luai_numpow(v1, v2); break;
+    case OP_POW: d = luai_numpow(v1, v2); r = (lua_Number)d; break;
     case OP_UNM: r = luai_numunm(v1); break;
     case OP_LEN: return 0;  /* no constant folding for 'len' */
     default: lua_assert(0); r = 0; break;
@@ -670,6 +686,15 @@ static void codearith (FuncState *fs, OpCode op, expdesc *e1, expdesc *e2) {
 }
 
 
+static void codeunaryarith (FuncState *fs, OpCode op, expdesc *e) {
+  expdesc e2;
+  e2.t = e2.f = NO_JUMP; e2.k = VKNUM; e2.u.nval = 0;
+  if (!isnumeral(e))
+    luaK_exp2anyreg(fs, e);  /* cannot operate on non-numeric constants */
+  codearith(fs, op, e, &e2);
+}
+
+
 static void codecomp (FuncState *fs, OpCode op, int cond, expdesc *e1,
                                                           expdesc *e2) {
   int o1 = luaK_exp2RK(fs, e1);
@@ -690,12 +715,8 @@ void luaK_prefix (FuncState *fs, UnOpr op, expdesc *e) {
   expdesc e2;
   e2.t = e2.f = NO_JUMP; e2.k = VKNUM; e2.u.nval = 0;
   switch (op) {
-    case OPR_MINUS: {
-      if (!isnumeral(e))
-        luaK_exp2anyreg(fs, e);  /* cannot operate on non-numeric constants */
-      codearith(fs, OP_UNM, e, &e2);
-      break;
-    }
+    case OPR_MINUS: codeunaryarith(fs, OP_UNM, e); break;
+    case OPR_BNOT: codeunaryarith(fs, OP_BNOT, e); break;
     case OPR_NOT: codenot(fs, e); break;
     case OPR_LEN: {
       luaK_exp2anyreg(fs, e);  /* cannot operate on constants */
@@ -764,6 +785,11 @@ void luaK_posfix (FuncState *fs, BinOpr op, expdesc *e1, expdesc *e2) {
       }
       break;
     }
+    case OPR_BAND: codearith(fs, OP_BAND, e1, e2); break;
+    case OPR_BOR: codearith(fs, OP_BOR, e1, e2); break;
+    case OPR_BXOR: codearith(fs, OP_BXOR, e1, e2); break;
+    case OPR_BSHL: codearith(fs, OP_BSHL, e1, e2); break;
+    case OPR_BSHR: codearith(fs, OP_BSHR, e1, e2); break;
     case OPR_ADD: codearith(fs, OP_ADD, e1, e2); break;
     case OPR_SUB: codearith(fs, OP_SUB, e1, e2); break;
     case OPR_MUL: codearith(fs, OP_MUL, e1, e2); break;
@@ -828,4 +854,3 @@ void luaK_setlist (FuncState *fs, int base, int nelems, int tostore) {
   }
   fs->freereg = base + 1;  /* free registers with list values */
 }
-

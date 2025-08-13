@@ -28,11 +28,6 @@
 #define FREELIST_REF	0	/* free list of references */
 
 
-/* convert a stack index to positive */
-#define abs_index(L, i)		((i) > 0 || (i) <= LUA_REGISTRYINDEX ? (i) : \
-					lua_gettop(L) + (i) + 1)
-
-
 /*
 ** {======================================================
 ** Error-report functions
@@ -123,7 +118,7 @@ LUALIB_API int luaL_newmetatable (lua_State *L, const char *tname) {
 
 LUALIB_API void *luaL_checkudata (lua_State *L, int ud, const char *tname) {
   void *p = lua_touserdata(L, ud);
-  if (p != NULL) {  /* value is a userdata? */
+  if (l_likely(p != NULL)) {  /* value is a userdata? */
     if (lua_getmetatable(L, ud)) {  /* does it have a metatable? */
       lua_getfield(L, LUA_REGISTRYINDEX, tname);  /* get correct metatable */
       if (lua_rawequal(L, -1, -2)) {  /* does it have the correct mt? */
@@ -138,26 +133,26 @@ LUALIB_API void *luaL_checkudata (lua_State *L, int ud, const char *tname) {
 
 
 LUALIB_API void luaL_checkstack (lua_State *L, int space, const char *mes) {
-  if (!lua_checkstack(L, space))
+  if (l_unlikely(!lua_checkstack(L, space)))
     luaL_error(L, "stack overflow (%s)", mes);
 }
 
 
 LUALIB_API void luaL_checktype (lua_State *L, int narg, int t) {
-  if (lua_type(L, narg) != t)
+  if (l_unlikely(lua_type(L, narg) != t))
     tag_error(L, narg, t);
 }
 
 
 LUALIB_API void luaL_checkany (lua_State *L, int narg) {
-  if (lua_type(L, narg) == LUA_TNONE)
+  if (l_unlikely(lua_type(L, narg) == LUA_TNONE))
     luaL_argerror(L, narg, "value expected");
 }
 
 
 LUALIB_API const char *luaL_checklstring (lua_State *L, int narg, size_t *len) {
   const char *s = lua_tolstring(L, narg, len);
-  if (!s) tag_error(L, narg, LUA_TSTRING);
+  if (l_unlikely(!s)) tag_error(L, narg, LUA_TSTRING);
   return s;
 }
 
@@ -175,7 +170,7 @@ LUALIB_API const char *luaL_optlstring (lua_State *L, int narg,
 
 LUALIB_API lua_Number luaL_checknumber (lua_State *L, int narg) {
   lua_Number d = lua_tonumber(L, narg);
-  if (d == 0 && !lua_isnumber(L, narg))  /* avoid extra test when d is not 0 */
+  if (l_unlikely(d == 0 && !lua_isnumber(L, narg)))  /* avoid extra test when d is not 0 */
     tag_error(L, narg, LUA_TNUMBER);
   return d;
 }
@@ -183,20 +178,6 @@ LUALIB_API lua_Number luaL_checknumber (lua_State *L, int narg) {
 
 LUALIB_API lua_Number luaL_optnumber (lua_State *L, int narg, lua_Number def) {
   return luaL_opt(L, luaL_checknumber, narg, def);
-}
-
-
-LUALIB_API lua_Integer luaL_checkinteger (lua_State *L, int narg) {
-  lua_Integer d = lua_tointeger(L, narg);
-  if (d == 0 && !lua_isnumber(L, narg))  /* avoid extra test when d is not 0 */
-    tag_error(L, narg, LUA_TNUMBER);
-  return d;
-}
-
-
-LUALIB_API lua_Integer luaL_optinteger (lua_State *L, int narg,
-                                                      lua_Integer def) {
-  return luaL_opt(L, luaL_checkinteger, narg, def);
 }
 
 
@@ -571,11 +552,17 @@ LUALIB_API int luaL_loadfile (lua_State *L, const char *filename) {
     if (c == '\n') c = getc(lf.f);
   }
   if (c == LUA_SIGNATURE[0] && filename) {  /* binary file? */
+#ifdef LUA_ALLOW_BYTECODE
     lf.f = freopen(filename, "rb", lf.f);  /* reopen in binary mode */
     if (lf.f == NULL) return errfile(L, "reopen", fnameindex);
     /* skip eventual `#!...' */
-   while ((c = getc(lf.f)) != EOF && c != LUA_SIGNATURE[0]) ;
+   while ((c = getc(lf.f)) != EOF && c != LUA_SIGNATURE[0])
+    ;
     lf.extraline = 0;
+#else
+    fclose(lf.f);
+    return errfile(L, "handle binary", fnameindex);
+#endif
   }
   ungetc(c, lf.f);
   status = lua_load(L, getF, &lf, lua_tostring(L, -1));
@@ -649,4 +636,3 @@ LUALIB_API lua_State *luaL_newstate (void) {
   if (L) lua_atpanic(L, &panic);
   return L;
 }
-

@@ -11,6 +11,13 @@
 #include <limits.h>
 #include <stddef.h>
 
+#ifdef _MSC_VER
+#define INT32 __int32
+#else
+#include <stdint.h>
+#define INT32 int32_t
+#endif
+
 
 /*
 ** ==================================================================
@@ -36,7 +43,7 @@
 #if defined(LUA_USE_LINUX)
 #define LUA_USE_POSIX
 #define LUA_USE_DLOPEN		/* needs an extra library: -ldl */
-/* #define LUA_USE_READLINE */	/* needs some extra libraries */
+#define LUA_USE_READLINE	/* needs some extra libraries */
 #endif
 
 #if defined(LUA_USE_MACOSX)
@@ -140,7 +147,7 @@
 ** CHANGE that if ptrdiff_t is not adequate on your machine. (On most
 ** machines, ptrdiff_t gives a good choice between int or long.)
 */
-#define LUA_INTEGER	ptrdiff_t
+#define LUA_INTEGER	INT32
 
 
 /*
@@ -251,7 +258,7 @@
 ** CHANGE it if your stand-alone interpreter has a different name and
 ** your system is not able to detect that name automatically.
 */
-#define LUA_PROGNAME		"luajit"
+#define LUA_PROGNAME		"lua"
 
 
 /*
@@ -318,8 +325,6 @@
 @@ LUA_COMPAT_GETN controls compatibility with old getn behavior.
 ** CHANGE it (define it) if you want exact compatibility with the
 ** behavior of setn/getn in Lua 5.0.
-**
-** Note: this is not supported by LuaJIT. Leave it undefined.
 */
 #undef LUA_COMPAT_GETN
 
@@ -334,10 +339,6 @@
 @@ LUA_COMPAT_VARARG controls compatibility with old vararg feature.
 ** CHANGE it to undefined as soon as your programs use only '...' to
 ** access vararg parameters (instead of the old 'arg' table).
-**
-** Note: this has a slightly negative performance impact with LuaJIT
-** for all vararg functions. Leave it off if possible and upgrade your
-** code (replace unpack(arg) with ... and/or add local arg = {...}).
 */
 #undef LUA_COMPAT_VARARG
 
@@ -346,7 +347,7 @@
 ** CHANGE it to undefined as soon as your programs use 'math.fmod' or
 ** the new '%' operator instead of 'math.mod'.
 */
-#define LUA_COMPAT_MOD
+#undef LUA_COMPAT_MOD
 
 /*
 @@ LUA_COMPAT_LSTR controls compatibility with old long string nesting
@@ -361,7 +362,7 @@
 ** CHANGE it to undefined as soon as you rename 'string.gfind' to
 ** 'string.gmatch'.
 */
-#define LUA_COMPAT_GFIND
+#undef LUA_COMPAT_GFIND
 
 /*
 @@ LUA_COMPAT_OPENLIB controls compatibility with old 'luaL_openlib'
@@ -369,7 +370,7 @@
 ** CHANGE it to undefined as soon as you replace to 'luaL_register'
 ** your uses of 'luaL_openlib'
 */
-#define LUA_COMPAT_OPENLIB
+#undef LUA_COMPAT_OPENLIB
 
 
 
@@ -452,6 +453,7 @@
 #define LUAI_MAXCSTACK	8000
 
 
+
 /*
 ** {==================================================================
 ** CHANGE (to smaller values) the following definitions if your system
@@ -506,14 +508,14 @@
 ** ===================================================================
 */
 
-#define LUA_NUMBER_DOUBLE
-#define LUA_NUMBER	double
+//#define LUA_NUMBER_DOUBLE
+#define LUA_NUMBER	INT32
 
 /*
 @@ LUAI_UACNUMBER is the result of an 'usual argument conversion'
 @* over a number.
 */
-#define LUAI_UACNUMBER	double
+#define LUAI_UACNUMBER	INT32
 
 
 /*
@@ -523,11 +525,16 @@
 @@ LUAI_MAXNUMBER2STR is maximum size of previous conversion.
 @@ lua_str2number converts a string to a number.
 */
-#define LUA_NUMBER_SCAN		"%lf"
-#define LUA_NUMBER_FMT		"%.14g"
+#ifdef LUA_WIN
+	#define LUA_NUMBER_SCAN		"%d"
+	#define LUA_NUMBER_FMT		"%d"
+#else
+	#define LUA_NUMBER_SCAN		"%d"
+	#define LUA_NUMBER_FMT		"%d"
+#endif
 #define lua_number2str(s,n)	sprintf((s), LUA_NUMBER_FMT, (n))
-#define LUAI_MAXNUMBER2STR	32 /* 16 digits, sign, point, and \0 */
-#define lua_str2number(s,p)	strtod((s), (p))
+#define LUAI_MAXNUMBER2STR	12 /* 10 digits, sign, and \0 */
+#define lua_str2number(s,p)	strtol((s), (p), 10)
 
 
 /*
@@ -539,13 +546,22 @@
 #define luai_numsub(a,b)	((a)-(b))
 #define luai_nummul(a,b)	((a)*(b))
 #define luai_numdiv(a,b)	((a)/(b))
-#define luai_nummod(a,b)	((a) - floor((a)/(b))*(b))
-#define luai_numpow(a,b)	(pow(a,b))
+#define luai_nummod(a,b)	(lua_Number)((a)%(b))
+#define luai_numpow(a,b)	(float)(pow((double)(a),(double)(b)))
 #define luai_numunm(a)		(-(a))
 #define luai_numeq(a,b)		((a)==(b))
 #define luai_numlt(a,b)		((a)<(b))
 #define luai_numle(a,b)		((a)<=(b))
 #define luai_numisnan(a)	(!luai_numeq((a), (a)))
+#define luai_numand(a,b)	((unsigned)(a)&(unsigned)(b))
+#define luai_numor(a,b)	((unsigned)(a)|(unsigned)(b))
+#define luai_numxor(a,b)	(((unsigned)(a))^((unsigned)(b)))
+#define luai_numshl(a,b)	((unsigned)(a)<<(unsigned)(b))
+#define luai_numshr(a,b)	((unsigned)(a)>>(unsigned)(b))
+#define	luai_numnot(a)		(~((unsigned)(a)))
+#ifdef _MSC_VER
+#pragma warning(disable : 4244)
+#endif
 #endif
 
 
@@ -585,24 +601,6 @@ union luai_Cast { double l_d; long l_l; };
 #define lua_number2int(i,d)	((i)=(int)(d))
 #define lua_number2integer(i,d)	((i)=(lua_Integer)(d))
 
-#endif
-
-
-/*
-@@ LUA_TVALUE_ALIGN specifies extra alignment constraints for the
-@@ tagged value structure to get better lua_Number alignment.
-** CHANGE it to an empty define if you want to save some space
-** at the cost of execution time. Note that this is only needed
-** for the x86 ABI on most POSIX systems, but not on Windows and
-** not for most other CPUs. If you change it then you need to follow
-** the instructions in ljit_x86.dash, too (look for TVALUE_SIZE).
-*/
-
-#if defined(LUA_NUMBER_DOUBLE) && defined(__GNUC__) && \
-    (defined(__i386) || defined(__i386__)) && !defined(_WIN32)
-#define LUA_TVALUE_ALIGN	__attribute__ ((aligned(8)))
-#else
-#define LUA_TVALUE_ALIGN
 #endif
 
 /* }================================================================== */
@@ -776,6 +774,23 @@ union luai_Cast { double l_d; long l_l; };
 /* =================================================================== */
 
 /*
+ * * macros to improve jump prediction, used mostly for error handling
+ ** and debug facilities.
+ */
+#if !defined(l_likely)
+
+#include <stdio.h>
+#if defined(__GNUC__)
+#define l_likely(x)	(__builtin_expect(((x) != 0), 1))
+#define l_unlikely(x)	(__builtin_expect(((x) != 0), 0))
+#else
+#define l_likely(x)	(x)
+#define l_unlikely(x)	(x)
+#endif
+
+#endif
+
+/*
 ** Local configuration. You can use this space to add your redefinitions
 ** without modifying the main part of the file.
 */
@@ -783,4 +798,3 @@ union luai_Cast { double l_d; long l_l; };
 
 
 #endif
-

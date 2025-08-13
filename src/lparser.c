@@ -1,5 +1,5 @@
 /*
-** $Id: lparser.c,v 2.42.1.4 2011/10/21 19:31:42 roberto Exp $
+** $Id: lparser.c,v 2.42.1.3 2007/12/28 15:32:23 roberto Exp $
 ** Lua Parser
 ** See Copyright Notice in lua.h
 */
@@ -40,6 +40,7 @@
 typedef struct BlockCnt {
   struct BlockCnt *previous;  /* chain */
   int breaklist;  /* list of jumps out of this loop */
+  int continuelist;
   lu_byte nactvar;  /* # active locals outside the breakable structure */
   lu_byte upval;  /* true if some variable in the block is an upvalue */
   lu_byte isbreakable;  /* true if `block' is a loop */
@@ -102,7 +103,7 @@ static void checknext (LexState *ls, int c) {
 
 
 static void check_match (LexState *ls, int what, int who, int where) {
-  if (!testnext(ls, what)) {
+  if (l_unlikely(!testnext(ls, what))) {
     if (where == ls->linenumber)
       error_expected(ls, what);
     else {
@@ -274,7 +275,7 @@ static void adjust_assign (LexState *ls, int nvars, int nexps, expdesc *e) {
 
 
 static void enterlevel (LexState *ls) {
-  if (++ls->L->nCcalls > LUAI_MAXCCALLS)
+  if (l_unlikely(++ls->L->nCcalls > LUAI_MAXCCALLS))
 	luaX_lexerror(ls, "chunk has too many syntax levels", 0);
 }
 
@@ -284,6 +285,7 @@ static void enterlevel (LexState *ls) {
 
 static void enterblock (FuncState *fs, BlockCnt *bl, lu_byte isbreakable) {
   bl->breaklist = NO_JUMP;
+  bl->continuelist = NO_JUMP;
   bl->isbreakable = isbreakable;
   bl->nactvar = fs->nactvar;
   bl->upval = 0;
@@ -333,6 +335,9 @@ static void open_func (LexState *ls, FuncState *fs) {
   fs->ls = ls;
   fs->L = L;
   ls->fs = fs;
+  fs->lhs = NULL;
+  fs->nlhs = 0;
+  fs->nrhs = 0;
   fs->pc = 0;
   fs->lasttarget = -1;
   fs->jpc = NO_JUMP;
@@ -374,9 +379,9 @@ static void close_func (LexState *ls) {
   lua_assert(luaG_checkcode(f));
   lua_assert(fs->bl == NULL);
   ls->fs = fs->prev;
+  L->top -= 2;  /* remove table and prototype from the stack */
   /* last token read was anchored in defunct function; must reanchor it */
   if (fs) anchor_token(ls);
-  L->top -= 2;  /* remove table and prototype from the stack */
 }
 
 
@@ -573,6 +578,31 @@ static void parlist (LexState *ls) {
 }
 
 
+/*AK(12-Jan-06): DO_PATCH "do .. end" same as "function() ... end"
+*
+* The following functions are shortened versions of 'parlist()' and
+* 'body()', please compare with them if there's issues.
+*/
+static void parlist_empty (LexState *ls) {
+  FuncState *fs = ls->fs;
+  Proto *f = fs->f;
+  f->is_vararg = 0;
+  adjustlocalvars(ls, 0 /*nparams*/);
+  f->numparams = cast_byte(fs->nactvar);
+  luaK_reserveregs(fs, fs->nactvar);  /* reserve register for parameters */
+  }
+static void body_noparms (LexState *ls, expdesc *e, int line) {
+  /* body ->  chunk END */
+  FuncState new_fs;
+  open_func(ls, &new_fs);
+  new_fs.f->linedefined = line;
+  parlist_empty(ls);
+  chunk(ls);
+  new_fs.f->lastlinedefined = ls->linenumber;
+  check_match(ls, TK_END, TK_DO /*TK_FUNCTION*/, line);
+  close_func(ls);
+  pushclosure(ls, &new_fs, e);
+}
 static void body (LexState *ls, expdesc *e, int needself, int line) {
   /* body ->  `(' parlist `)' chunk END */
   FuncState new_fs;
@@ -613,7 +643,7 @@ static void funcargs (LexState *ls, expdesc *f) {
   int line = ls->linenumber;
   switch (ls->t.token) {
     case '(': {  /* funcargs -> `(' [ explist1 ] `)' */
-      if (line != ls->lastline)
+      if (l_unlikely(line != ls->lastline))
         luaX_syntaxerror(ls,"ambiguous syntax (function call x new statement)");
       luaX_next(ls);
       if (ls->t.token == ')')  /* arg list is empty? */
@@ -677,6 +707,34 @@ static void prefixexp (LexState *ls, expdesc *v) {
     }
     case TK_NAME: {
       singlevar(ls, v);
+      return;
+    }
+    case '$': {
+      lua_Number i = ls->t.seminfo.r;
+      if (i == 0) i = ls->fs->nrhs;
+      if (l_unlikely(i <= 0 || i > ls->fs->nlhs))
+        luaX_syntaxerror(ls, "pseudo-variable out of range or not in assignment");
+      else {
+        expdesc_list *lhs = ls->fs->lhs;
+        i = ls->fs->nlhs - i;
+        while (i--) lhs = lhs->prev;
+        *v = lhs->v;
+        /* If this is a VINDEXED, we need to stash the result in a temporary without
+         * freereg'ing the index locals. Really, it would be better to keep the value
+         * in case we repeat the $, but there's no way to do that without shifting all
+         * the temps up one slot to create room for the value. It would be semantically
+         * correct to also do that for globals, in case I ever get around to importing
+         * the shift mechanism from comprehensions.
+         */
+        if (v->k == VINDEXED) {
+          int extra = ls->fs->freereg;
+          luaK_codeABC(ls->fs, OP_GETTABLE, extra, v->u.s.info, v->u.s.aux);
+          v->k = VNONRELOC;
+          v->u.s.info = extra;
+          luaK_reserveregs(ls->fs, 1);
+        }
+      }
+      luaX_next(ls);
       return;
     }
     default: {
@@ -761,6 +819,11 @@ static void simpleexp (LexState *ls, expdesc *v) {
       constructor(ls, v);
       return;
     }
+    case TK_DO: {       /* "do .. end" same as "function() .. end" */
+      luaX_next(ls);    /* skip 'do' */
+      body_noparms(ls, v, ls->linenumber);
+      return;
+    }
     case TK_FUNCTION: {
       luaX_next(ls);
       body(ls, v, 0, ls->linenumber);
@@ -780,6 +843,7 @@ static UnOpr getunopr (int op) {
     case TK_NOT: return OPR_NOT;
     case '-': return OPR_MINUS;
     case '#': return OPR_LEN;
+    case '~': return OPR_BNOT;
     default: return OPR_NOUNOPR;
   }
 }
@@ -802,6 +866,11 @@ static BinOpr getbinopr (int op) {
     case TK_GE: return OPR_GE;
     case TK_AND: return OPR_AND;
     case TK_OR: return OPR_OR;
+    case '&': return OPR_BAND;
+    case '|': return OPR_BOR;
+    case TK_XOR: return OPR_BXOR;
+    case TK_SHL: return OPR_BSHL;
+    case TK_SHR: return OPR_BSHR;
     default: return OPR_NOBINOPR;
   }
 }
@@ -816,6 +885,8 @@ static const struct {
    {3, 3}, {3, 3},                  /* equality and inequality */
    {3, 3}, {3, 3}, {3, 3}, {3, 3},  /* order */
    {2, 2}, {1, 1}                   /* logical (and/or) */
+   ,{6, 6}, {6, 6}, {6, 6},           /* bit-wise (band/bor/bxor) */
+   {7, 7}, {7, 7}		    /* shl/shr */
 };
 
 #define UNARY_PRIORITY	8  /* priority for unary operators */
@@ -893,10 +964,6 @@ static void block (LexState *ls) {
 ** structure to chain all variables in the left-hand side of an
 ** assignment
 */
-struct LHS_assign {
-  struct LHS_assign *prev;
-  expdesc v;  /* variable (global, local, upvalue, or indexed) */
-};
 
 
 /*
@@ -905,7 +972,7 @@ struct LHS_assign {
 ** local value in a safe place and use this safe copy in the previous
 ** assignment.
 */
-static void check_conflict (LexState *ls, struct LHS_assign *lh, expdesc *v) {
+static void check_conflict (LexState *ls, expdesc_list *lh, expdesc *v) {
   FuncState *fs = ls->fs;
   int extra = fs->freereg;  /* eventual position to save local variable */
   int conflict = 0;
@@ -926,20 +993,78 @@ static void check_conflict (LexState *ls, struct LHS_assign *lh, expdesc *v) {
     luaK_reserveregs(fs, 1);
   }
 }
+static void pushlhs (FuncState *fs, expdesc_list *v) {
+  fs->lhs = v;
+  fs->nlhs++;
+  fs->nrhs++;
+}
 
+static void poplhs (FuncState *fs) {
+  lua_assert(fs->lhs != NULL);
+  fs->lhs = fs->lhs->prev;
+  fs->nlhs--;
+}
+
+
+static void assignment (LexState *ls) {
+  expdesc e;
+  expdesc_list *lh = ls->fs->lhs;
+  check_condition(ls, VLOCAL <= lh->v.k && lh->v.k <= VINDEXED,
+                      "syntax error");
+  if (testnext(ls, ',')) {  /* assignment -> `,' primaryexp assignment */
+    expdesc_list nv;
+    nv.prev = lh;
+    primaryexp(ls, &nv.v);
+    if (nv.v.k == VLOCAL)
+      check_conflict(ls, lh, &nv.v);
+    luaY_checklimit(ls->fs, ls->fs->nrhs, LUAI_MAXCCALLS - ls->L->nCcalls,
+                    "variables in assignment");
+    pushlhs(ls->fs, &nv);
+    assignment(ls);
+    poplhs(ls->fs);
+  }
+  else {  /* assignment -> `=' explist1 */
+//    int nexps;
+    checknext(ls, '=');
+    ls->fs->nrhs = 1;
+    expr(ls, &e);
+    while (testnext(ls, ',')) {
+      luaK_exp2nextreg(ls->fs, &e);
+      ls->fs->nrhs++;
+      expr(ls, &e);
+    }
+    if (ls->fs->nrhs != ls->fs->nlhs) {
+      adjust_assign(ls, ls->fs->nlhs, ls->fs->nrhs, &e);
+      if (ls->fs->nrhs > ls->fs->nlhs)
+        ls->fs->freereg -= ls->fs->nrhs - ls->fs->nlhs;  /* remove extra values */
+    }
+    else {
+      luaK_setoneret(ls->fs, &e);  /* close last expression */
+      luaK_storevar(ls->fs, &lh->v, &e);
+      return;  /* avoid default */
+    }
+  }
+  init_exp(&e, VNONRELOC, ls->fs->freereg-1);  /* default assignment */
+  luaK_storevar(ls->fs, &lh->v, &e);
+}
+
+#if 0
 
 static void assignment (LexState *ls, struct LHS_assign *lh, int nvars) {
   expdesc e;
   check_condition(ls, VLOCAL <= lh->v.k && lh->v.k <= VINDEXED,
                       "syntax error");
   if (testnext(ls, ',')) {  /* assignment -> `,' primaryexp assignment */
-    struct LHS_assign nv;
+    expdesc_list nv;
     nv.prev = lh;
     primaryexp(ls, &nv.v);
     if (nv.v.k == VLOCAL)
       check_conflict(ls, lh, &nv.v);
     luaY_checklimit(ls->fs, nvars, LUAI_MAXCCALLS - ls->L->nCcalls,
                     "variables in assignment");
+    pushlhs(ls->fs, &nv);
+    assignment(ls);
+    poplhs(ls->fs);
     assignment(ls, &nv, nvars+1);
   }
   else {  /* assignment -> `=' explist1 */
@@ -960,7 +1085,7 @@ static void assignment (LexState *ls, struct LHS_assign *lh, int nvars) {
   init_exp(&e, VNONRELOC, ls->fs->freereg-1);  /* default assignment */
   luaK_storevar(ls->fs, &lh->v, &e);
 }
-
+#endif
 
 static int cond (LexState *ls) {
   /* cond -> exp */
@@ -972,15 +1097,15 @@ static int cond (LexState *ls) {
 }
 
 
-static void breakstat (LexState *ls) {
+static void breakstat (LexState *ls, lua_Number n) {
   FuncState *fs = ls->fs;
   BlockCnt *bl = fs->bl;
   int upval = 0;
-  while (bl && !bl->isbreakable) {
+  while (bl && (!bl->isbreakable || --n)) {
     upval |= bl->upval;
     bl = bl->previous;
   }
-  if (!bl)
+  if (l_unlikely(!bl))
     luaX_syntaxerror(ls, "no loop to break");
   if (upval)
     luaK_codeABC(fs, OP_CLOSE, bl->nactvar, 0, 0);
@@ -988,6 +1113,27 @@ static void breakstat (LexState *ls) {
 }
 
 
+static void continuestat (LexState *ls) {
+  /* stat -> CONTINUE */
+  FuncState *fs = ls->fs;
+  BlockCnt *bl = fs->bl;
+  // TBD: Not sure if also continue should have the upvalue check? Original patch had not.
+  //int upval = 0;
+  luaX_next(ls);  /* skip CONTINUE */
+  while (bl && !bl->isbreakable) {
+    //upval |= bl->upval;     // AK: ADDITION (would this fix forbody probs?)
+    bl = bl->previous;
+  }
+  if (l_unlikely(!bl))
+    luaX_syntaxerror(ls, "no loop to continue");
+
+  //if (upval)    //AK: experimental
+  //  luaK_codeABC(fs, OP_CLOSE, bl->nactvar, 0, 0);
+
+  luaK_concat(fs, &bl->continuelist, luaK_jump(fs));
+
+//fprintf( stderr, "continue: bl->continuelist=%d %p %p\n", bl->continuelist, bl, bl->previous );
+}
 static void whilestat (LexState *ls, int line) {
   /* whilestat -> WHILE cond DO block END */
   FuncState *fs = ls->fs;
@@ -998,8 +1144,10 @@ static void whilestat (LexState *ls, int line) {
   whileinit = luaK_getlabel(fs);
   condexit = cond(ls);
   enterblock(fs, &bl, 1);
-  checknext(ls, TK_DO);
+  testnext(ls, TK_DO);
   block(ls);
+//  luaK_patchlist(fs, luaK_jump(fs), bl.continuelist); -- bug rendering 'continue' useless in 'while', asko?
+  luaK_patchtohere(fs, bl.continuelist); // this one works for me --kt
   luaK_patchlist(fs, luaK_jump(fs), whileinit);
   check_match(ls, TK_END, TK_WHILE, line);
   leaveblock(fs);
@@ -1017,6 +1165,7 @@ static void repeatstat (LexState *ls, int line) {
   enterblock(fs, &bl2, 0);  /* scope block */
   luaX_next(ls);  /* skip REPEAT */
   chunk(ls);
+  luaK_patchtohere(fs, bl1.continuelist);
   check_match(ls, TK_UNTIL, TK_REPEAT, line);
   condexit = cond(ls);  /* read condition (inside scope block) */
   if (!bl2.upval) {  /* no upvalues? */
@@ -1024,7 +1173,7 @@ static void repeatstat (LexState *ls, int line) {
     luaK_patchlist(ls->fs, condexit, repeat_init);  /* close the loop */
   }
   else {  /* complete semantics when there are upvalues */
-    breakstat(ls);  /* if condition then break */
+    breakstat(ls, 1);  /* if condition then break */
     luaK_patchtohere(ls->fs, condexit);  /* else... */
     leaveblock(fs);  /* finish scope... */
     luaK_patchlist(ls->fs, luaK_jump(fs), repeat_init);  /* and repeat */
@@ -1049,12 +1198,13 @@ static void forbody (LexState *ls, int base, int line, int nvars, int isnum) {
   FuncState *fs = ls->fs;
   int prep, endfor;
   adjustlocalvars(ls, 3);  /* control variables */
-  checknext(ls, TK_DO);
+  testnext(ls, TK_DO);
   prep = isnum ? luaK_codeAsBx(fs, OP_FORPREP, base, NO_JUMP) : luaK_jump(fs);
   enterblock(fs, &bl, 0);  /* scope for declared variables */
   adjustlocalvars(ls, nvars);
   luaK_reserveregs(fs, nvars);
   block(ls);
+  luaK_patchtohere(fs, bl.previous->continuelist);
   leaveblock(fs);  /* end of scope for declared variables */
   luaK_patchtohere(fs, prep);
   endfor = (isnum) ? luaK_codeAsBx(fs, OP_FORLOOP, base, NO_JUMP) :
@@ -1132,7 +1282,7 @@ static int test_then_block (LexState *ls) {
   int condexit;
   luaX_next(ls);  /* skip IF or ELSEIF */
   condexit = cond(ls);
-  checknext(ls, TK_THEN);
+  testnext(ls, TK_THEN);
   block(ls);  /* `then' part */
   return condexit;
 }
@@ -1224,13 +1374,18 @@ static void funcstat (LexState *ls, int line) {
 static void exprstat (LexState *ls) {
   /* stat -> func | assignment */
   FuncState *fs = ls->fs;
-  struct LHS_assign v;
+  expdesc_list v;
   primaryexp(ls, &v.v);
   if (v.v.k == VCALL)  /* stat -> func */
     SETARG_C(getcode(fs, &v.v), 1);  /* call statement uses no results */
   else {  /* stat -> assignment */
     v.prev = NULL;
-    assignment(ls, &v, 1);
+    lua_assert(ls->fs->lhs == NULL && ls->fs->nlhs == 0 && ls->fs->nrhs == 0);
+    pushlhs(ls->fs, &v);
+    assignment(ls);
+    poplhs(ls->fs);
+    ls->fs->nrhs = 0;
+    lua_assert(ls->fs->lhs == NULL && ls->fs->nlhs == 0);
   }
 }
 
@@ -1311,7 +1466,13 @@ static int statement (LexState *ls) {
     }
     case TK_BREAK: {  /* stat -> breakstat */
       luaX_next(ls);  /* skip BREAK */
-      breakstat(ls);
+      if (testnext(ls, TK_NUMBER)) { /* multi scope 'break n' */
+        breakstat(ls, ls->t.seminfo.r);
+      } else breakstat(ls, 1);
+      return 1;  /* must be last statement */
+    }
+    case TK_CONTINUE: {  /* stat -> continuestat */
+      continuestat(ls);
       return 1;  /* must be last statement */
     }
     default: {

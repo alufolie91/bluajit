@@ -1,5 +1,5 @@
 /*
-** $Id: liolib.c,v 2.73.1.4 2010/05/14 15:33:51 roberto Exp $
+** $Id: liolib.c,v 2.73.1.3 2008/01/18 17:47:43 roberto Exp $
 ** Standard I/O (and system) library
 ** See Copyright Notice in lua.h
 */
@@ -71,7 +71,7 @@ static int io_type (lua_State *L) {
 
 static FILE *tofile (lua_State *L) {
   FILE **f = tofilep(L);
-  if (*f == NULL)
+  if (l_unlikely(*f == NULL))
     luaL_error(L, "attempt to use a closed file");
   return *f;
 }
@@ -99,17 +99,6 @@ static int io_noclose (lua_State *L) {
   lua_pushnil(L);
   lua_pushliteral(L, "cannot close standard file");
   return 2;
-}
-
-
-/*
-** function to close 'popen' files
-*/
-static int io_pclose (lua_State *L) {
-  FILE **p = tofilep(L);
-  int ok = lua_pclose(L, *p);
-  *p = NULL;
-  return pushresult(L, ok, NULL);
 }
 
 
@@ -157,25 +146,11 @@ static int io_tostring (lua_State *L) {
   return 1;
 }
 
-
 static int io_open (lua_State *L) {
   const char *filename = luaL_checkstring(L, 1);
   const char *mode = luaL_optstring(L, 2, "r");
   FILE **pf = newfile(L);
   *pf = fopen(filename, mode);
-  return (*pf == NULL) ? pushresult(L, 0, filename) : 1;
-}
-
-
-/*
-** this function has a separated environment, which defines the
-** correct __close for 'popen' files
-*/
-static int io_popen (lua_State *L) {
-  const char *filename = luaL_checkstring(L, 1);
-  const char *mode = luaL_optstring(L, 2, "r");
-  FILE **pf = newfile(L);
-  *pf = lua_popen(L, filename, mode);
   return (*pf == NULL) ? pushresult(L, 0, filename) : 1;
 }
 
@@ -191,7 +166,7 @@ static FILE *getiofile (lua_State *L, int findex) {
   FILE *f;
   lua_rawgeti(L, LUA_ENVIRONINDEX, findex);
   f = *(FILE **)lua_touserdata(L, -1);
-  if (f == NULL)
+  if (l_unlikely(f == NULL))
     luaL_error(L, "standard %s file is closed", fnames[findex - 1]);
   return f;
 }
@@ -203,7 +178,7 @@ static int g_iofile (lua_State *L, int f, const char *mode) {
     if (filename) {
       FILE **pf = newfile(L);
       *pf = fopen(filename, mode);
-      if (*pf == NULL)
+      if (l_unlikely(*pf == NULL))
         fileerror(L, 1, filename);
     }
     else {
@@ -255,7 +230,7 @@ static int io_lines (lua_State *L) {
     const char *filename = luaL_checkstring(L, 1);
     FILE **pf = newfile(L);
     *pf = fopen(filename, "r");
-    if (*pf == NULL)
+    if (l_unlikely(*pf == NULL))
       fileerror(L, 1, filename);
     aux_lines(L, lua_gettop(L), 1);
     return 1;
@@ -272,14 +247,11 @@ static int io_lines (lua_State *L) {
 
 static int read_number (lua_State *L, FILE *f) {
   lua_Number d;
-  if (fscanf(f, LUA_NUMBER_SCAN, &d) == 1) {
+  if (l_likely(fscanf(f, LUA_NUMBER_SCAN, &d) == 1)) {
     lua_pushnumber(L, d);
     return 1;
   }
-  else {
-    lua_pushnil(L);  /* "result" to be removed */
-    return 0;  /* read fails */
-  }
+  else return 0;  /* read fails */
 }
 
 
@@ -446,7 +418,7 @@ static int f_seek (lua_State *L) {
   int op = luaL_checkoption(L, 2, "cur", modenames);
   long offset = luaL_optlong(L, 3, 0);
   op = fseek(f, offset, mode[op]);
-  if (op)
+  if (l_unlikely(op))
     return pushresult(L, 0, NULL);  /* error */
   else {
     lua_pushinteger(L, ftell(f));
@@ -484,7 +456,6 @@ static const luaL_Reg iolib[] = {
   {"lines", io_lines},
   {"open", io_open},
   {"output", io_output},
-  {"popen", io_popen},
   {"read", io_read},
   {"tmpfile", io_tmpfile},
   {"type", io_type},
@@ -547,10 +518,6 @@ LUALIB_API int luaopen_io (lua_State *L) {
   createstdfile(L, stdout, IO_OUTPUT, "stdout");
   createstdfile(L, stderr, 0, "stderr");
   lua_pop(L, 1);  /* pop environment for default files */
-  lua_getfield(L, -1, "popen");
-  newfenv(L, io_pclose);  /* create environment for 'popen' */
-  lua_setfenv(L, -2);  /* set fenv for 'popen' */
-  lua_pop(L, 1);  /* pop 'popen' */
   return 1;
 }
 

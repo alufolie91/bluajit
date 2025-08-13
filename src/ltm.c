@@ -30,10 +30,13 @@ const char *const luaT_typenames[] = {
 void luaT_init (lua_State *L) {
   static const char *const luaT_eventname[] = {  /* ORDER TM */
     "__index", "__newindex",
+    "__usedindex",
     "__gc", "__mode", "__eq",
     "__add", "__sub", "__mul", "__div", "__mod",
     "__pow", "__unm", "__len", "__lt", "__le",
     "__concat", "__call"
+    ,"__strhook"
+    ,"__and", "__or", "__xor", "__shl", "__shr", "__not"
   };
   int i;
   for (i=0; i<TM_N; i++) {
@@ -47,8 +50,8 @@ void luaT_init (lua_State *L) {
 ** function to be used with macro "fasttm": optimized for absence of
 ** tag methods
 */
-const TValue *luaT_gettm (Table *events, TMS event, TString *ename) {
-  const TValue *tm = luaH_getstr(events, ename);
+TValue *luaT_gettm (Table *events, TMS event, TString *ename) {
+  TValue *tm = luaH_getstr(events, ename);
   lua_assert(event <= TM_EQ);
   if (ttisnil(tm)) {  /* no tag method? */
     events->flags |= cast_byte(1u<<event);  /* cache this fact */
@@ -58,7 +61,7 @@ const TValue *luaT_gettm (Table *events, TMS event, TString *ename) {
 }
 
 
-const TValue *luaT_gettmbyobj (lua_State *L, const TValue *o, TMS event) {
+TValue *luaT_gettmbyobj (lua_State *L, TValue *o, TMS event) {
   Table *mt;
   switch (ttype(o)) {
     case LUA_TTABLE:
@@ -72,4 +75,3 @@ const TValue *luaT_gettmbyobj (lua_State *L, const TValue *o, TMS event) {
   }
   return (mt ? luaH_getstr(mt, G(L)->tmname[event]) : luaO_nilobject);
 }
-

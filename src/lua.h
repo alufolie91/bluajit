@@ -1,5 +1,5 @@
 /*
-** $Id: lua.h,v 1.218.1.7 2012/01/13 20:36:20 roberto Exp $
+** $Id: lua.h,v 1.218.1.5 2008/08/06 13:30:12 roberto Exp $
 ** Lua - An Extensible Extension Language
 ** Lua.org, PUC-Rio, Brazil (http://www.lua.org)
 ** See Copyright Notice at the end of this file
@@ -17,9 +17,9 @@
 
 
 #define LUA_VERSION	"Lua 5.1"
-#define LUA_RELEASE	"Lua 5.1.5"
+#define LUA_RELEASE	"Lua 5.1.4"
 #define LUA_VERSION_NUM	501
-#define LUA_COPYRIGHT	"Copyright (C) 1994-2012 Lua.org, PUC-Rio"
+#define LUA_COPYRIGHT	"Copyright (C) 1994-2008 Lua.org, PUC-Rio"
 #define LUA_AUTHORS 	"R. Ierusalimschy, L. H. de Figueiredo & W. Celes"
 
 
@@ -100,7 +100,7 @@ typedef LUA_NUMBER lua_Number;
 
 
 /* type for integer functions */
-typedef LUA_INTEGER lua_Integer;
+#define lua_Integer lua_Number
 
 
 
@@ -144,7 +144,7 @@ LUA_API int            (lua_rawequal) (lua_State *L, int idx1, int idx2);
 LUA_API int            (lua_lessthan) (lua_State *L, int idx1, int idx2);
 
 LUA_API lua_Number      (lua_tonumber) (lua_State *L, int idx);
-LUA_API lua_Integer     (lua_tointeger) (lua_State *L, int idx);
+#define lua_tointeger lua_tonumber
 LUA_API int             (lua_toboolean) (lua_State *L, int idx);
 LUA_API const char     *(lua_tolstring) (lua_State *L, int idx, size_t *len);
 LUA_API size_t          (lua_objlen) (lua_State *L, int idx);
@@ -159,7 +159,7 @@ LUA_API const void     *(lua_topointer) (lua_State *L, int idx);
 */
 LUA_API void  (lua_pushnil) (lua_State *L);
 LUA_API void  (lua_pushnumber) (lua_State *L, lua_Number n);
-LUA_API void  (lua_pushinteger) (lua_State *L, lua_Integer n);
+#define lua_pushinteger lua_pushnumber
 LUA_API void  (lua_pushlstring) (lua_State *L, const char *s, size_t l);
 LUA_API void  (lua_pushstring) (lua_State *L, const char *s);
 LUA_API const char *(lua_pushvfstring) (lua_State *L, const char *fmt,
@@ -168,6 +168,7 @@ LUA_API const char *(lua_pushfstring) (lua_State *L, const char *fmt, ...);
 LUA_API void  (lua_pushcclosure) (lua_State *L, lua_CFunction fn, int n);
 LUA_API void  (lua_pushboolean) (lua_State *L, int b);
 LUA_API void  (lua_pushlightuserdata) (lua_State *L, void *p);
+LUA_API void  (lua_pushuserdata) (lua_State *L, void *p);
 LUA_API int   (lua_pushthread) (lua_State *L);
 
 
@@ -245,7 +246,7 @@ LUA_API void lua_setallocf (lua_State *L, lua_Alloc f, void *ud);
 
 
 
-/* 
+/*
 ** ===============================================================
 ** some useful macros
 ** ===============================================================
@@ -293,6 +294,9 @@ LUA_API void lua_setallocf (lua_State *L, lua_Alloc f, void *ud);
 #define lua_Chunkreader		lua_Reader
 #define lua_Chunkwriter		lua_Writer
 
+
+/* hack */
+LUA_API void lua_setlevel	(lua_State *from, lua_State *to);
 
 
 /*
@@ -359,7 +363,7 @@ struct lua_Debug {
 
 
 /******************************************************************************
-* Copyright (C) 1994-2012 Lua.org, PUC-Rio.  All rights reserved.
+* Copyright (C) 1994-2008 Lua.org, PUC-Rio.  All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining
 * a copy of this software and associated documentation files (the

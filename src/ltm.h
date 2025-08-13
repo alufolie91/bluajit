@@ -18,6 +18,7 @@
 typedef enum {
   TM_INDEX,
   TM_NEWINDEX,
+  TM_USEDINDEX,
   TM_GC,
   TM_MODE,
   TM_EQ,  /* last tag method with `fast' access */
@@ -33,6 +34,13 @@ typedef enum {
   TM_LE,
   TM_CONCAT,
   TM_CALL,
+  TM_STRHOOK,
+  TM_AND,
+  TM_OR,
+  TM_XOR,
+  TM_SHL,
+  TM_SHR,
+  TM_NOT,
   TM_N		/* number of elements in the enum */
 } TMS;
 
@@ -46,9 +54,8 @@ typedef enum {
 LUAI_DATA const char *const luaT_typenames[];
 
 
-LUAI_FUNC const TValue *luaT_gettm (Table *events, TMS event, TString *ename);
-LUAI_FUNC const TValue *luaT_gettmbyobj (lua_State *L, const TValue *o,
-                                                       TMS event);
+LUAI_FUNC TValue *luaT_gettm (Table *events, TMS event, TString *ename);
+LUAI_FUNC TValue *luaT_gettmbyobj (lua_State *L, TValue *o, TMS event);
 LUAI_FUNC void luaT_init (lua_State *L);
 
 #endif

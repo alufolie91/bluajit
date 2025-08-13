@@ -10,8 +10,10 @@
 #include "lobject.h"
 #include "lzio.h"
 
+#ifdef LUA_ALLOW_BYTECODE
 /* load one chunk; from lundump.c */
 LUAI_FUNC Proto* luaU_undump (lua_State* L, ZIO* Z, Mbuffer* buff, const char* name);
+#endif
 
 /* make header; from lundump.c */
 LUAI_FUNC void luaU_header (char* h);

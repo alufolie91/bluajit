@@ -111,10 +111,10 @@ static void LoadConstants(LoadState* S, Proto* f)
   switch (t)
   {
    case LUA_TNIL:
-   	setnilvalue(o);
+	setnilvalue(o);
 	break;
    case LUA_TBOOLEAN:
-   	setbvalue(o,LoadChar(S)!=0);
+	setbvalue(o,LoadChar(S)!=0);
 	break;
    case LUA_TNUMBER:
 	setnvalue(o,LoadNumber(S));
@@ -180,6 +180,7 @@ static Proto* LoadFunction(LoadState* S, TString* p)
  return f;
 }
 
+#ifdef LUA_ALLOW_BYTECODE
 static void LoadHeader(LoadState* S)
 {
  char h[LUAC_HEADERSIZE];
@@ -207,6 +208,7 @@ Proto* luaU_undump (lua_State* L, ZIO* Z, Mbuffer* buff, const char* name)
  LoadHeader(&S);
  return LoadFunction(&S,luaS_newliteral(L,"=?"));
 }
+#endif
 
 /*
 * make header
@@ -223,5 +225,5 @@ void luaU_header (char* h)
  *h++=(char)sizeof(size_t);
  *h++=(char)sizeof(Instruction);
  *h++=(char)sizeof(lua_Number);
- *h++=(char)(((lua_Number)0.5)==0);		/* is lua_Number integral? */
+ *h++=(char)(((lua_Number)0.5L)==0);		/* is lua_Number integral? */
 }
